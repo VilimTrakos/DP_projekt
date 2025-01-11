@@ -5,6 +5,7 @@ from tkinter import Canvas
 
 HOST = '127.0.0.1'
 PORT = 50007
+
 WINDOW_SIZE = 800
 GRID_SIZE = 100
 CELL_SIZE = 10
@@ -16,7 +17,14 @@ class GameOfLifeGUI:
         self.canvas = Canvas(self.root, width=WINDOW_SIZE, height=WINDOW_SIZE, bg="white")
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.draw_grid()
-       
+
+        self.cells = set()
+        self.rects = {}
+        self.lock = threading.Lock()
+        
+        #Mouse bindings
+        self.canvas.bind("<Button-1>", self.left_click)   # single-click toggle
+        self.canvas.bind("<B1-Motion>", self.left_drag)   # left mouse drag for painting
 
     def set_server(self, server):
         self.server = server
@@ -28,6 +36,50 @@ class GameOfLifeGUI:
 
     def start(self):
         self.root.mainloop()
+
+    def left_click(self, event):
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        cell_x = int(x // CELL_SIZE)
+        cell_y = int(y // CELL_SIZE)
+        with self.lock:
+            if (cell_x, cell_y) in self.cells:
+                # black -> empty
+                self.cells.remove((cell_x, cell_y))
+                if (cell_x, cell_y) in self.rects:
+                    self.canvas.delete(self.rects[(cell_x, cell_y)])
+                    del self.rects[(cell_x, cell_y)]
+            else:
+                # empty -> black
+                self.cells.add((cell_x, cell_y))
+                rect = self.canvas.create_rectangle(
+                    cell_x * CELL_SIZE,
+                    cell_y * CELL_SIZE,
+                    (cell_x + 1) * CELL_SIZE,
+                    (cell_y + 1) * CELL_SIZE,
+                    fill="black",
+                    tags="cell"
+                )
+                self.rects[(cell_x, cell_y)] = rect
+
+    def left_drag(self, event):
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        cell_x = int(x // CELL_SIZE)
+        cell_y = int(y // CELL_SIZE)
+        with self.lock:
+            if (cell_x, cell_y) not in self.cells:
+                self.cells.add((cell_x, cell_y))
+                rect = self.canvas.create_rectangle(
+                    cell_x * CELL_SIZE,
+                    cell_y * CELL_SIZE,
+                    (cell_x + 1) * CELL_SIZE,
+                    (cell_y + 1) * CELL_SIZE,
+                    fill="black",
+                    tags="cell"
+                )
+                self.rects[(cell_x, cell_y)] = rect
+
 
 class GameOfLifeServer:
     def __init__(self):
