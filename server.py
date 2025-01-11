@@ -2,6 +2,7 @@ import socket
 import threading
 import tkinter as tk
 from tkinter import Canvas
+import json
 
 HOST = '127.0.0.1'
 PORT = 50007
@@ -22,7 +23,7 @@ class GameOfLifeGUI:
         self.rects = {}
         self.lock = threading.Lock()
         
-        #Mouse bindings
+        # Mouse bindings
         self.canvas.bind("<Button-1>", self.left_click)   # single-click toggle
         self.canvas.bind("<B1-Motion>", self.left_drag)   # left mouse drag for painting
         self.canvas.bind("<ButtonPress-3>", self.right_click_press)
@@ -64,6 +65,7 @@ class GameOfLifeGUI:
                     tags="cell"
                 )
                 self.rects[(cell_x, cell_y)] = rect
+        self.server.broadcast_cells()
 
     def left_drag(self, event):
         x = self.canvas.canvasx(event.x)
@@ -82,6 +84,7 @@ class GameOfLifeGUI:
                     tags="cell"
                 )
                 self.rects[(cell_x, cell_y)] = rect
+        self.server.broadcast_cells()
     
     def right_click_press(self, event):
         self.canvas.scan_mark(event.x, event.y)
@@ -92,37 +95,70 @@ class GameOfLifeGUI:
     def right_click_release(self, event):
         pass
 
+    def get_initial_cells(self):
+        with self.lock:
+            return list(self.cells)
 
 class GameOfLifeServer:
-    def __init__(self):
+    def __init__(self, gui):
+        self.gui = gui
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((HOST, PORT))
         self.server.listen(5)
         print(f"[INFO] Server started on {HOST}:{PORT}")
+        self.clients = []
+        self.lock = threading.Lock()
 
     def handle_client(self, client_socket, addr):
-        print(f"[INFO] Connected by {addr}")
-        client_socket.sendall(b"Hello from server!")
-        while True:
-            data = client_socket.recv(1024)
-            if not data:
-                break
-        client_socket.close()
+        print(f"[INFO] New connection from {addr}")
+        try:
+            initial_cells = self.gui.get_initial_cells()
+            initial_data = json.dumps({"cells": initial_cells}) + "\n"
+            print(f"[DEBUG] Sending initial cells to {addr}: {initial_data}")
+            client_socket.sendall(initial_data.encode('utf-8'))
+
+            while True:
+                data = client_socket.recv(1024)
+                if not data:
+                    break
+        except Exception as e:
+            print(f"[ERROR] Connection with {addr} lost: {e}")
+        finally:
+            with self.lock:
+                if client_socket in self.clients:
+                    self.clients.remove(client_socket)
+            client_socket.close()
+            print(f"[INFO] Connection with {addr} closed.")
+
+    def broadcast_cells(self):
+        with self.lock:
+            cells = self.gui.get_initial_cells()
+            data = json.dumps({"cells": cells}) + "\n"
+            for client in self.clients[:]:
+                try:
+                    client.sendall(data.encode('utf-8'))
+                except Exception as e:
+                    print(f"[ERROR] Failed to send data to {client.getpeername()}: {e}")
+                    self.clients.remove(client)
+                    client.close()
 
     def run(self):
         while True:
-            client_socket, addr = self.server.accept()
-            thread = threading.Thread(target=self.handle_client, args=(client_socket, addr), daemon=True)
+            client, addr = self.server.accept()
+            print(f"[DEBUG] Accepted new client: {addr}")
+            with self.lock:
+                self.clients.append(client)
+            thread = threading.Thread(target=self.handle_client, args=(client, addr))
+            thread.daemon = True
             thread.start()
 
 def main():
     gui = GameOfLifeGUI()
-    server = GameOfLifeServer()
-    gui.set_server(server)
-
-    server_thread = threading.Thread(target=server.run, daemon=True)
+    server = GameOfLifeServer(gui)
+    gui.set_server(server)  # Link GUI with server
+    server_thread = threading.Thread(target=server.run)
+    server_thread.daemon = True
     server_thread.start()
-    
     gui.start()
 
 if __name__ == "__main__":
