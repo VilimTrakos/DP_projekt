@@ -15,14 +15,14 @@
 
 (in-package :game-of-life-client)
 
-;; GLOBALS
-
 (defvar *socket* nil
   "Socket object connected to the server.")
 
 (defvar *stream* nil
   "Stream associated with the socket.")
 
+(defvar *local-cells* (make-hash-table :test 'equal)
+  "Local representation of the cells.")
 
 ;; 1) CONNECT TO SERVER
 
@@ -35,20 +35,22 @@
     (finish-output)
     (values socket stream)))
 
-
 ;; 2) PROCESS SERVER MESSAGES
 
 (defun process-json (json-data)
   (format t "~&[DEBUG] Received JSON Data: ~S~%" json-data)
   (finish-output)
   
-  ;; Provjeri da li JSON sadrži ključ "cells"
   (when (and (hash-table-p json-data)
              (gethash "cells" json-data))
     (let ((cells (gethash "cells" json-data)))
-      (format t "~&[INFO] Received Cells: ~a~%" cells)
-      (finish-output))))
+      (clrhash *local-cells*) 
+      (dolist (cell cells)
+        (setf (gethash cell *local-cells*) t))
+      (format t "~&[INFO] Updated local cells: ~a~%" (hash-table-keys *local-cells*))
+      (finish-output)
 
+      )))
 
 ;; 3) READ SERVER RESPONSES
 
@@ -68,7 +70,7 @@
               (format t "~&[DEBUG] Before calling process-json...~%")
               (finish-output)
 
-              (process-json json-data stream)
+              (process-json json-data)
 
               (format t "~&[DEBUG] After process-json call~%")
               (finish-output)))
@@ -77,23 +79,23 @@
           (finish-output)))))
 
 ;; 4) MAIN
-
 (defun main ()
   (let ((host "127.0.0.1")
-        (port 50007)
-        (socket nil)
-        (stream nil))
+        (port 50007))
     (handler-case
         (progn
-          (multiple-value-setq (socket stream) (connect-to-server host port))
-          (read-server-responses stream))
+          (multiple-value-bind (socket stream)
+              (connect-to-server host port)
+            (setf *socket* socket
+                  *stream* stream)
+            (read-server-responses stream)))
       (error (e)
         (format t "~&[ERROR] Could not connect or read from server: ~a~%" e)
         (finish-output)))
-    (when socket
+    (when *socket*
       (format t "~&[DEBUG] Closing socket...~%")
       (finish-output)
-      (socket-close socket)
+      (socket-close *socket*)
       (format t "~&[INFO] Socket closed.~%")
       (finish-output))))
 
