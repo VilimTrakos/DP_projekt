@@ -25,6 +25,9 @@ class GameOfLifeGUI:
         #Mouse bindings
         self.canvas.bind("<Button-1>", self.left_click)   # single-click toggle
         self.canvas.bind("<B1-Motion>", self.left_drag)   # left mouse drag for painting
+        self.canvas.bind("<ButtonPress-3>", self.right_click_press)
+        self.canvas.bind("<B3-Motion>", self.right_click_drag)
+        self.canvas.bind("<ButtonRelease-3>", self.right_click_release)
 
     def set_server(self, server):
         self.server = server
@@ -79,6 +82,15 @@ class GameOfLifeGUI:
                     tags="cell"
                 )
                 self.rects[(cell_x, cell_y)] = rect
+    
+    def right_click_press(self, event):
+        self.canvas.scan_mark(event.x, event.y)
+
+    def right_click_drag(self, event):
+        self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def right_click_release(self, event):
+        pass
 
 
 class GameOfLifeServer:
@@ -107,8 +119,10 @@ def main():
     gui = GameOfLifeGUI()
     server = GameOfLifeServer()
     gui.set_server(server)
+
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
+    
     gui.start()
 
 if __name__ == "__main__":
