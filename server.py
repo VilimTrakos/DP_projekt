@@ -3,6 +3,7 @@ import threading
 import tkinter as tk
 from tkinter import Canvas
 import json
+
 HOST = '127.0.0.1'
 PORT = 50007
 
@@ -111,11 +112,19 @@ class GameOfLifeGUI:
         print(f"[DEBUG] update_cells() called with {len(new_cells)} new cells.")
         with self.lock:
             cells_to_add = new_cells - self.cells
+            cells_to_remove = self.cells - new_cells
+
             for c in cells_to_add:
                 print(f"[DEBUG] Adding cell: {c}")
                 self.draw_cell(c)
-            self.cells.update(cells_to_add)
-        print("[DEBUG] update_cells() finished adding new cells to GUI.")
+
+            for c in cells_to_remove:
+                print(f"[DEBUG] Removing cell: {c}")
+                self.delete_cell(c)
+
+            self.cells = new_cells
+
+        print("[DEBUG] update_cells() finished updating cells in GUI.")
 
     def get_initial_cells(self):
         with self.lock:

@@ -35,10 +35,49 @@
     (finish-output)
     (values socket stream)))
 
-;; 2) SENDING UPDATES
+;; 2) GAME OF LIFE HELPERS
+(defun neighbors (x y)
+  "Return the 8 neighbor coordinates around (x,y)."
+  (loop for dx from -1 to 1
+        nconc
+        (loop for dy from -1 to 1
+              unless (and (= dx 0) (= dy 0))
+              collect (list (+ x dx) (+ y dy)))))
 
+(defun next-generation (cells)
+  "Compute the next generation of Conway's Game of Life for given live CELLS."
+  (format t "~&[DEBUG] next-generation called with ~D cells: ~a~%"
+          (length cells) cells)
+  (finish-output)
+  (let ((alive (make-hash-table :test 'equal)))
+    (dolist (c cells)
+      (setf (gethash c alive) t))
+    (let ((candidates (make-hash-table :test 'equal))
+          (new-cells '()))
+      (dolist (c cells)
+        (setf (gethash c candidates) t)
+        (destructuring-bind (cx cy) c
+          (dolist (nbr (neighbors cx cy))
+            (setf (gethash nbr candidates) t))))
+      (maphash
+       (lambda (cand _val)
+         (destructuring-bind (x y) cand
+           (let ((alive-neighbors
+                  (count t (mapcar (lambda (n)
+                                     (gethash n alive nil))
+                                   (neighbors x y))))
+                 (currently-alive (gethash cand alive nil)))
+             (cond
+               ((and currently-alive (or (= alive-neighbors 2) (= alive-neighbors 3)))
+                (push cand new-cells))
+               ((and (not currently-alive) (= alive-neighbors 3))
+                (push cand new-cells))))))
+       candidates)
+      (nreverse new-cells))))
+
+;; 3) SENDING UPDATES
 (defun send-update-command (stream cells)
-  "Sends {\"cmd\":\"UPDATE\",\"cells\":[...]} to the server."
+
   (let* ((msg `(("cmd" . "UPDATE")
                 ("cells" . ,cells)))
          (json-str (encode-json-to-string msg)))
@@ -52,31 +91,21 @@
     (format stream "~a~%" json-str)
     (finish-output stream)))
 
-;; 3) PROCESS SERVER MESSAGES
+;; 4) PROCESS SERVER MESSAGES
 
-(defun process-json (json-data)
-  (format t "~&[DEBUG] Received JSON Data: ~S~%" json-data)
-  (finish-output)
-  (let ((cells-assoc (assoc :CELLS json-data)))
-    (when cells-assoc
-      (let ((cells (cdr cells-assoc)))
-        (clrhash *local-cells*) 
-        (dolist (cell cells)
-          (when (and (listp cell)
-                     (= (length cell) 2)
-                     (every #'integerp cell))
-            (setf (gethash cell *local-cells*) t)))
-        (format t "~&[INFO] Updated local cells: ~a~%" 
-                (loop for key being the hash-keys of *local-cells*
-                      collect key))
-        (finish-output)
-        
-        (let ((cells-to-send '((2 2) (2 3) (2 4)
-                               (3 2) (3 3) (3 4)
-                               (4 2) (4 3) (4 4))))
-          (send-update-command *stream* cells-to-send))))))
+(defun process-json (json-data stream)
+  (when (and (listp json-data)
+             (not (null json-data)))
+    (let ((first-elt (first json-data)))
+      (when (and (consp first-elt)
+                 (eq (car first-elt) :CELLS))
+        (let ((cells (cdr first-elt)))
+          (let ((next-gen (next-generation cells)))
 
-;; 4) READ SERVER RESPONSES
+            (sleep 0.05)
+            (send-update-command stream next-gen)))))))
+
+;; 5) READ SERVER RESPONSES
 
 (defun read-server-responses (stream)
   (loop
@@ -94,7 +123,7 @@
               (format t "~&[DEBUG] Before calling process-json...~%")
               (finish-output)
 
-              (process-json json-data)
+              (process-json json-data stream)
 
               (format t "~&[DEBUG] After process-json call~%")
               (finish-output)))
@@ -102,7 +131,7 @@
           (format t "~&[ERROR] Could not parse/process JSON. Error: ~a~%" e)
           (finish-output)))))
 
-;; 5) MAIN
+;; 6) MAIN
 (defun main ()
   (let ((host "127.0.0.1")
         (port 50007))
