@@ -1,7 +1,7 @@
 import socket
 import threading
 import tkinter as tk
-from tkinter import Canvas
+from tkinter import Canvas, Button
 import json
 
 HOST = '127.0.0.1'
@@ -30,6 +30,21 @@ class GameOfLifeGUI:
         self.canvas.bind("<ButtonRelease-3>", self.right_click_release)
 
         self.lock = threading.Lock()
+
+        self.button_frame = tk.Frame(self.root)
+        self.button_frame.pack(side=tk.RIGHT, fill=tk.Y)
+
+        clear_button = Button(self.button_frame, text="Clear All", command=self.clear_all)
+        clear_button.pack(padx=5, pady=5)
+
+        start_button = Button(self.button_frame, text="Start Simulation", command=self.start_simulation)
+        start_button.pack(padx=5, pady=5)
+
+        stop_button = Button(self.button_frame, text="Stop Simulation", command=self.stop_simulation)
+        stop_button.pack(padx=5, pady=5)
+
+    def set_server(self, server):
+        self.server = server
 
     def draw_grid(self):
         for i in range(GRID_SIZE + 1):
@@ -130,6 +145,27 @@ class GameOfLifeGUI:
         with self.lock:
             return list(self.cells)
 
+    def clear_all(self):
+        with self.lock:
+            for cell in list(self.cells):
+                if cell in self.rects:
+                    self.canvas.delete(self.rects[cell])
+                    del self.rects[cell]
+            self.cells.clear()
+        print("[DEBUG] All cells cleared.")
+
+    def start_simulation(self):
+        if self.server:
+            self.server.start_simulation()
+        else:
+            print("[WARN] No server reference; cannot start simulation.")
+
+    def stop_simulation(self):
+        if self.server:
+            self.server.stop_simulation()
+        else:
+            print("[WARN] No server reference; cannot stop simulation.")
+
     def start(self):
         self.root.mainloop()
 
@@ -144,6 +180,8 @@ class GameOfLifeServer:
         self.clients = []
         self.lock = threading.Lock()
 
+        self.simulation_running = False
+
     def handle_client(self, client_socket, addr):
         print(f"[INFO] New connection from {addr}")
         try:
@@ -157,30 +195,27 @@ class GameOfLifeServer:
                 if not data:
                     print(f"[DEBUG] No data from {addr}. Closing.")
                     break
-                messages = data.decode('utf-8').split('\n')
-                for message in messages:
-                    if not message.strip():
-                        continue
-                    print(f"[DEBUG] Received from {addr}: {message}")
+                message = data.decode('utf-8').strip()
+                print(f"[DEBUG] Received from {addr}: {message}")
 
-                    try:
-                        command = json.loads(message)
-                        cmd_type = command.get("cmd")
+                try:
+                    command = json.loads(message)
+                    cmd_type = command.get("cmd")
 
-                        if cmd_type == "UPDATE":
-                            new_cells = set(tuple(c) for c in command.get("cells", []))
-                            print(f"[DEBUG] Received 'UPDATE' from {addr}. New cells to add: {new_cells}")
+                    if cmd_type == "UPDATE":
+                        new_cells = set(tuple(c) for c in command.get("cells", []))
+                        print(f"[DEBUG] Received 'UPDATE' from {addr}. New cells to add: {new_cells}")
 
-                            self.gui.update_cells(new_cells)
-                            
-                            updated_data = json.dumps({"cells": list(map(list, self.gui.get_initial_cells()))})
-                            client_socket.sendall((updated_data + "\n").encode('utf-8'))
-                            print(f"[DEBUG] Sent updated cell set to {addr}: {updated_data}")
-                        else:
-                            print(f"[WARN] Unknown command from {addr}: {cmd_type}")
+                        self.gui.update_cells(new_cells)
 
-                    except json.JSONDecodeError:
-                        print(f"[ERROR] Failed to parse JSON from {addr}: {message}")
+                        updated_data = json.dumps({"cells": list(map(list, self.gui.get_initial_cells()))})
+                        client_socket.sendall((updated_data + "\n").encode('utf-8'))
+                        print(f"[DEBUG] Sent updated cell set to {addr}: {updated_data}")
+                    else:
+                        print(f"[WARN] Unknown command from {addr}: {cmd_type}")
+
+                except json.JSONDecodeError:
+                    print(f"[ERROR] Failed to parse JSON from {addr}: {message}")
 
         except ConnectionResetError:
             print(f"[WARN] Connection reset by {addr}")
@@ -201,9 +236,33 @@ class GameOfLifeServer:
             thread.daemon = True
             thread.start()
 
+    def broadcast(self, message_dict):
+        data = json.dumps(message_dict) + "\n"
+        with self.lock:
+            for client_socket in self.clients:
+                try:
+                    client_socket.sendall(data.encode('utf-8'))
+                except:
+                    print("[ERROR] Could not send broadcast message to a client.")
+
+    def start_simulation(self):
+        if not self.simulation_running:
+            self.simulation_running = True
+            print("[INFO] Simulation started on the server.")
+            current_cells = self.gui.get_initial_cells()
+            self.broadcast({"cmd": "START", "cells": current_cells})
+
+    def stop_simulation(self):
+        if self.simulation_running:
+            self.simulation_running = False
+            print("[INFO] Simulation stopped on the server.")
+            self.broadcast({"cmd": "STOP"})
+
+
 def main():
     gui = GameOfLifeGUI()
     server = GameOfLifeServer(gui)
+    gui.set_server(server)
     server_thread = threading.Thread(target=server.run)
     server_thread.daemon = True
     server_thread.start()
