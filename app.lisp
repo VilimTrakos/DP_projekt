@@ -39,7 +39,7 @@
 ;; 1) CONNECT TO SERVER
 
 (defun connect-to-server (host port)
-  (format t "~&[DEBUG] Attempting to connect to ~a:~a ...~%" host port)
+  (format t "~&[INFO] Attempting to connect to ~a:~a ...~%" host port)
   (finish-output)
   (let* ((socket (socket-connect host port))
          (stream (socket-stream socket)))
@@ -49,7 +49,6 @@
 
 ;; 2) GAME OF LIFE HELPERS
 (defun neighbors (x y)
-  "Return the 8 neighbor coordinates around (x,y)."
   (loop for dx from -1 to 1
         nconc
         (loop for dy from -1 to 1
@@ -57,10 +56,6 @@
               collect (list (+ x dx) (+ y dy)))))
 
 (defun next-generation (cells)
-  "Compute the next generation of Conway's Game of Life for given live CELLS."
-  (format t "~&[DEBUG] next-generation called with ~D cells: ~a~%"
-          (length cells) cells)
-  (finish-output)
   (let ((alive (make-hash-table :test 'equal)))
     (dolist (c cells)
       (setf (gethash c alive) t))
@@ -93,19 +88,11 @@
   (let* ((msg `(("cmd" . "UPDATE")
                 ("cells" . ,cells)))
          (json-str (encode-json-to-string msg)))
-    (format t "~&[DEBUG] Sending UPDATE => ~D cells => ~a~%"
-            (length cells) cells)
-    (finish-output)
-
-    (format t "~&[DEBUG] JSON => ~a~%" json-str)
-    (finish-output)
-
     (format stream "~a~%" json-str)
     (finish-output stream)))
 
 ;; 4) BACKGROUND SIMULATION LOOP
 (defun simulation-loop (stream)
-  "A background thread that repeatedly steps the game while *simulation-running*."
   (loop
     while (not *stop-thread*) do
       (when (and *simulation-running* *current-cells*)
@@ -138,47 +125,35 @@
     (let ((cmd-assoc (assoc :CMD json-data)))
       (when cmd-assoc
         (let ((cmd (cdr cmd-assoc)))
-          (format t "~&[DEBUG] Received CMD => ~A~%" cmd)
-          (finish-output)
           (cond
             ((string= cmd "START")
              (let ((cells-assoc (assoc :CELLS json-data)))
                (when cells-assoc
-                 (setf *current-cells* (cdr cells-assoc))
-                 (format t "~&[INFO] Replacing *current-cells* with ~D new cells~%"
-                         (length *current-cells*))
-                 (finish-output)))
+                 (setf *current-cells* (cdr cells-assoc))))
              (setf *simulation-running* t)
-             (format t "~&[INFO] Simulation START => *simulation-running* = T~%")
+             (format t "~&[INFO] Simulation START~%")
              (finish-output)
              (start-simulation-thread stream))
 
             ((string= cmd "STOP")
              (setf *simulation-running* nil)
-             (format t "~&[INFO] Simulation STOP => *simulation-running* = NIL~%")
+             (format t "~&[INFO] Simulation STOP~%")
              (finish-output)
              (stop-simulation-thread))
             (t
              (format t "~&[WARN] Unrecognized CMD => ~A~%" cmd)
              (finish-output))))))
-  (let ((cells-assoc (assoc :CELLS json-data)))
-    (when (and cells-assoc (null (assoc :CMD json-data)))
-      (let ((cells (cdr cells-assoc)))
-        (setf *current-cells* cells)
-        (format t "~&[INFO] Received ~D cells from server => storing in *current-cells*~%"
-                (length cells))
-        (finish-output))))))
+    (let ((cells-assoc (assoc :CELLS json-data)))
+      (when (and cells-assoc (null (assoc :CMD json-data)))
+        (setf *current-cells* (cdr cells-assoc))))))
 
 (defun read-server-responses (stream)
   (loop
     for line = (read-line stream nil :eof)
     while (and line (not (eq line :eof))) do
       (handler-case
-          (progn
-            (format t "~&[DEBUG] Got line => ~a~%" line)
-            (finish-output)
-            (let ((json-data (decode-json-from-string line)))
-              (process-json json-data stream)))
+          (let ((json-data (decode-json-from-string line)))
+            (process-json json-data stream))
         (error (e)
           (format t "~&[ERROR] Could not parse JSON => ~a~%" e)
           (finish-output)))))
@@ -199,7 +174,7 @@
         (format t "~&[ERROR] Could not connect or read from server: ~a~%" e)
         (finish-output)))
     (when *socket*
-      (format t "~&[DEBUG] Closing socket...~%")
+      (format t "~&[INFO] Closing socket...~%")
       (finish-output)
       (socket-close *socket*)
       (stop-simulation-thread)
