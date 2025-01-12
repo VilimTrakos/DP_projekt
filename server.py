@@ -3,7 +3,6 @@ import threading
 import tkinter as tk
 from tkinter import Canvas
 import json
-
 HOST = '127.0.0.1'
 PORT = 50007
 
@@ -15,46 +14,40 @@ class GameOfLifeGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Game of Life")
-        self.canvas = Canvas(self.root, width=WINDOW_SIZE, height=WINDOW_SIZE, bg="white")
-        self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.canvas = Canvas(self.root, width=WINDOW_SIZE, height=WINDOW_SIZE, bg="white", scrollregion=(0, 0, GRID_SIZE * CELL_SIZE, GRID_SIZE * CELL_SIZE))
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.draw_grid()
 
         self.cells = set()
         self.rects = {}
-        self.lock = threading.Lock()
-        
+
         # Mouse bindings
-        self.canvas.bind("<Button-1>", self.left_click)   # single-click toggle
-        self.canvas.bind("<B1-Motion>", self.left_drag)   # left mouse drag for painting
+        self.canvas.bind("<Button-1>", self.left_click)        
+        self.canvas.bind("<B1-Motion>", self.left_drag)        
         self.canvas.bind("<ButtonPress-3>", self.right_click_press)
         self.canvas.bind("<B3-Motion>", self.right_click_drag)
         self.canvas.bind("<ButtonRelease-3>", self.right_click_release)
 
-    def set_server(self, server):
-        self.server = server
+        self.lock = threading.Lock()
 
     def draw_grid(self):
         for i in range(GRID_SIZE + 1):
-            self.canvas.create_line(i * CELL_SIZE, 0, i * CELL_SIZE, GRID_SIZE * CELL_SIZE, fill="#ddd")
-            self.canvas.create_line(0, i * CELL_SIZE, GRID_SIZE * CELL_SIZE, i * CELL_SIZE, fill="#ddd")
-
-    def start(self):
-        self.root.mainloop()
+            self.canvas.create_line(i * CELL_SIZE, 0, i * CELL_SIZE, GRID_SIZE * CELL_SIZE, fill="#ddd", tags="grid")
+            self.canvas.create_line(0, i * CELL_SIZE, GRID_SIZE * CELL_SIZE, i * CELL_SIZE, fill="#ddd", tags="grid")
 
     def left_click(self, event):
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
         cell_x = int(x // CELL_SIZE)
         cell_y = int(y // CELL_SIZE)
+        
         with self.lock:
             if (cell_x, cell_y) in self.cells:
-                # black -> empty
                 self.cells.remove((cell_x, cell_y))
                 if (cell_x, cell_y) in self.rects:
                     self.canvas.delete(self.rects[(cell_x, cell_y)])
                     del self.rects[(cell_x, cell_y)]
             else:
-                # empty -> black
                 self.cells.add((cell_x, cell_y))
                 rect = self.canvas.create_rectangle(
                     cell_x * CELL_SIZE,
@@ -65,7 +58,6 @@ class GameOfLifeGUI:
                     tags="cell"
                 )
                 self.rects[(cell_x, cell_y)] = rect
-        self.server.broadcast_cells()
 
     def left_drag(self, event):
         x = self.canvas.canvasx(event.x)
@@ -84,8 +76,7 @@ class GameOfLifeGUI:
                     tags="cell"
                 )
                 self.rects[(cell_x, cell_y)] = rect
-        self.server.broadcast_cells()
-    
+
     def right_click_press(self, event):
         self.canvas.scan_mark(event.x, event.y)
 
@@ -95,9 +86,44 @@ class GameOfLifeGUI:
     def right_click_release(self, event):
         pass
 
+    def draw_cell(self, cell):
+        x, y = cell
+        if cell not in self.cells:
+            self.cells.add(cell)
+            rect = self.canvas.create_rectangle(
+                x * CELL_SIZE,
+                y * CELL_SIZE,
+                (x + 1) * CELL_SIZE,
+                (y + 1) * CELL_SIZE,
+                fill="black",
+                tags="cell"
+            )
+            self.rects[cell] = rect
+
+    def delete_cell(self, cell):
+        if cell in self.cells:
+            self.cells.remove(cell)
+            if cell in self.rects:
+                self.canvas.delete(self.rects[cell])
+                del self.rects[cell]
+
+    def update_cells(self, new_cells):
+        print(f"[DEBUG] update_cells() called with {len(new_cells)} new cells.")
+        with self.lock:
+            cells_to_add = new_cells - self.cells
+            for c in cells_to_add:
+                print(f"[DEBUG] Adding cell: {c}")
+                self.draw_cell(c)
+            self.cells.update(cells_to_add)
+        print("[DEBUG] update_cells() finished adding new cells to GUI.")
+
     def get_initial_cells(self):
         with self.lock:
             return list(self.cells)
+
+    def start(self):
+        self.root.mainloop()
+
 
 class GameOfLifeServer:
     def __init__(self, gui):
@@ -113,34 +139,48 @@ class GameOfLifeServer:
         print(f"[INFO] New connection from {addr}")
         try:
             initial_cells = self.gui.get_initial_cells()
-            initial_data = json.dumps({"cells": initial_cells}) + "\n"
+            initial_data = json.dumps({"cells": initial_cells})
             print(f"[DEBUG] Sending initial cells to {addr}: {initial_data}")
-            client_socket.sendall(initial_data.encode('utf-8'))
+            client_socket.sendall((initial_data + "\n").encode('utf-8'))
 
             while True:
-                data = client_socket.recv(1024)
+                data = client_socket.recv(4096)
                 if not data:
+                    print(f"[DEBUG] No data from {addr}. Closing.")
                     break
-        except Exception as e:
-            print(f"[ERROR] Connection with {addr} lost: {e}")
+                messages = data.decode('utf-8').split('\n')
+                for message in messages:
+                    if not message.strip():
+                        continue
+                    print(f"[DEBUG] Received from {addr}: {message}")
+
+                    try:
+                        command = json.loads(message)
+                        cmd_type = command.get("cmd")
+
+                        if cmd_type == "UPDATE":
+                            new_cells = set(tuple(c) for c in command.get("cells", []))
+                            print(f"[DEBUG] Received 'UPDATE' from {addr}. New cells to add: {new_cells}")
+
+                            self.gui.update_cells(new_cells)
+                            
+                            updated_data = json.dumps({"cells": list(map(list, self.gui.get_initial_cells()))})
+                            client_socket.sendall((updated_data + "\n").encode('utf-8'))
+                            print(f"[DEBUG] Sent updated cell set to {addr}: {updated_data}")
+                        else:
+                            print(f"[WARN] Unknown command from {addr}: {cmd_type}")
+
+                    except json.JSONDecodeError:
+                        print(f"[ERROR] Failed to parse JSON from {addr}: {message}")
+
+        except ConnectionResetError:
+            print(f"[WARN] Connection reset by {addr}")
         finally:
+            client_socket.close()
             with self.lock:
                 if client_socket in self.clients:
                     self.clients.remove(client_socket)
-            client_socket.close()
-            print(f"[INFO] Connection with {addr} closed.")
-
-    def broadcast_cells(self):
-        with self.lock:
-            cells = self.gui.get_initial_cells()
-            data = json.dumps({"cells": cells}) + "\n"
-            for client in self.clients[:]:
-                try:
-                    client.sendall(data.encode('utf-8'))
-                except Exception as e:
-                    print(f"[ERROR] Failed to send data to {client.getpeername()}: {e}")
-                    self.clients.remove(client)
-                    client.close()
+            print(f"[INFO] Connection closed from {addr}")
 
     def run(self):
         while True:
@@ -155,7 +195,6 @@ class GameOfLifeServer:
 def main():
     gui = GameOfLifeGUI()
     server = GameOfLifeServer(gui)
-    gui.set_server(server)  # Link GUI with server
     server_thread = threading.Thread(target=server.run)
     server_thread.daemon = True
     server_thread.start()

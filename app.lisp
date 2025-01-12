@@ -35,24 +35,48 @@
     (finish-output)
     (values socket stream)))
 
-;; 2) PROCESS SERVER MESSAGES
+;; 2) SENDING UPDATES
+
+(defun send-update-command (stream cells)
+  "Sends {\"cmd\":\"UPDATE\",\"cells\":[...]} to the server."
+  (let* ((msg `(("cmd" . "UPDATE")
+                ("cells" . ,cells)))
+         (json-str (encode-json-to-string msg)))
+    (format t "~&[DEBUG] Sending UPDATE => ~D cells => ~a~%"
+            (length cells) cells)
+    (finish-output)
+
+    (format t "~&[DEBUG] JSON => ~a~%" json-str)
+    (finish-output)
+
+    (format stream "~a~%" json-str)
+    (finish-output stream)))
+
+;; 3) PROCESS SERVER MESSAGES
 
 (defun process-json (json-data)
   (format t "~&[DEBUG] Received JSON Data: ~S~%" json-data)
   (finish-output)
-  
-  (when (and (hash-table-p json-data)
-             (gethash "cells" json-data))
-    (let ((cells (gethash "cells" json-data)))
-      (clrhash *local-cells*) 
-      (dolist (cell cells)
-        (setf (gethash cell *local-cells*) t))
-      (format t "~&[INFO] Updated local cells: ~a~%" (hash-table-keys *local-cells*))
-      (finish-output)
+  (let ((cells-assoc (assoc :CELLS json-data)))
+    (when cells-assoc
+      (let ((cells (cdr cells-assoc)))
+        (clrhash *local-cells*) 
+        (dolist (cell cells)
+          (when (and (listp cell)
+                     (= (length cell) 2)
+                     (every #'integerp cell))
+            (setf (gethash cell *local-cells*) t)))
+        (format t "~&[INFO] Updated local cells: ~a~%" 
+                (loop for key being the hash-keys of *local-cells*
+                      collect key))
+        (finish-output)
+        
+        (let ((cells-to-send '((2 2) (2 3) (2 4)
+                               (3 2) (3 3) (3 4)
+                               (4 2) (4 3) (4 4))))
+          (send-update-command *stream* cells-to-send))))))
 
-      )))
-
-;; 3) READ SERVER RESPONSES
+;; 4) READ SERVER RESPONSES
 
 (defun read-server-responses (stream)
   (loop
@@ -78,7 +102,7 @@
           (format t "~&[ERROR] Could not parse/process JSON. Error: ~a~%" e)
           (finish-output)))))
 
-;; 4) MAIN
+;; 5) MAIN
 (defun main ()
   (let ((host "127.0.0.1")
         (port 50007))
